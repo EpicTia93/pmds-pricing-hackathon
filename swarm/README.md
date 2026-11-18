@@ -115,6 +115,7 @@ uv run python -m swarm export --preset rival:niche --name rival-niche
 | `islands_neutral.yaml` | `config/generated/*`, match sizes 2–16 | all six including `neutral`, seeded from `islands_robust` |
 | `papers.yaml` | `default.yaml` (about a fifth), `scaled_market`, `config/generated/*`, 40% perturbed; about 27–35 teams per match with a starter-agent crowd | `revman`, `auction`, `capacity`, `tactex` |
 | `papers_robust.yaml` | as `papers`, plus 0–6 lot-draining whales per match; seeded from a `papers` run | the four engine families; `tactex` seeded with converted revman, auction and capacity champions |
+| `papers_extended.yaml` | the portal's two scenarios first: `default.yaml` and the 80-turn, 40k stand-ins in `config/extended/` (default and scaled market), plus `config/generated/*`; whales as in `papers_robust`; seeded from it | the four engine families, with `papers-revman` and `papers-tactex` as opponents |
 
 **Match size matters.** Rankings change a lot between small and crowded
 markets. In the first island run, `glut` won a playoff that put all 31 teams
