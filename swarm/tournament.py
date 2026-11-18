@@ -1,7 +1,7 @@
 """Run matches between entrants in parallel and score them the official way.
 
-An entrant is a dict ``{"id": str, "kind": "param", "params": {...}}`` for a
-``ParamAgent`` configuration, or ``{"id": str, "kind": "bundle", "path": str}``
+An entrant is a dict ``{"id": str, "kind": "param", "family": str, "params": {...}}``
+for a parametrised strategy of one family (see ``swarm/families``), or ``{"id": str, "kind": "bundle", "path": str}``
 for any agent bundle folder (built-ins, exported champions, other experiments).
 """
 
@@ -26,7 +26,7 @@ from dme_simulator.agents.loader import load_agent_bundle_class
 from dme_simulator.runner import run_simulation
 
 from .scenarios import build_config
-from .strategy import ParamAgent
+from .families import family as get_family
 
 REPO = Path(__file__).resolve().parent.parent
 BUILTIN_DIR = REPO / "src" / "dme_simulator" / "agents" / "builtin_bundles"
@@ -45,7 +45,7 @@ def bundle_entrant(path: str | Path, entrant_id: str | None = None) -> dict[str,
 
 def make_agent(entrant: dict[str, Any]) -> BaseAgent:
     if entrant["kind"] == "param":
-        return ParamAgent(**entrant["params"])
+        return get_family(entrant.get("family")).build(entrant["params"])
     path = entrant["path"]
     if path not in _bundle_cache:
         _bundle_cache[path] = load_agent_bundle_class(path)

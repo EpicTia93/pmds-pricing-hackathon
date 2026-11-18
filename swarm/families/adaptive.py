@@ -1,4 +1,4 @@
-"""Fully parametrised market strategy.
+"""Adaptive family: cost-plus pricing steered by sell-through (the original strategy).
 
 This module is self-contained: it imports only the public agent interface, so
 it can be copied verbatim into a submission bundle (see ``swarm export``).
@@ -379,3 +379,7 @@ class ParamAgent(BaseAgent):
                     total += recipe.inputs.get(material, 0) * self._demand.get(good, 0.0)
                     break
         return ceil(total)
+
+
+AGENT = ParamAgent
+DEFAULTS = DEFAULT_PARAMS

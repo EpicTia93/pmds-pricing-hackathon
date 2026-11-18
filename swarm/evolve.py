@@ -1,9 +1,19 @@
-"""Evolutionary search over ``ParamAgent`` strategies, driven by a YAML experiment."""
+"""Island-model evolution of several strategy families in parallel.
+
+Each family (``swarm/families``) is an island with its own population, search
+space and selection. Every generation, all islands are pooled into the same
+matches ("mixed", co-evolution: families must beat each other) or kept apart
+("separate"). All matches go through one parallel process pool. Selection,
+crossover and mutation happen within each island, because parameter sets of
+different families are not compatible. A global hall of fame and a final
+cross-family playoff choose the champion.
+"""
 
 from __future__ import annotations
 
 import json
 import random
+import statistics
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -11,6 +21,7 @@ from typing import Any
 
 import yaml
 
+from .families import FAMILIES
 from .presets import resolve as resolve_presets
 from .scenarios import DEFAULT_PERTURB
 from .space import ParamSpace
@@ -26,6 +37,27 @@ from .tournament import (
     score,
 )
 
+SELECTION_DEFAULTS: dict[str, Any] = {
+    "elite": 0.2,                   # survivors: count, or fraction of the island if < 1
+    "tournament_k": 3,
+    "crossover_rate": 0.6,
+    "mutation_rate": 0.25,          # per-parameter mutation probability
+    "mutation_scale": 0.15,         # gaussian sigma as a fraction of the range
+    "immigrants": 0.08,             # fresh random members: count, or fraction if < 1
+    "fitness_memory": True,         # survivors accumulate results across generations
+    "min_matches_for_elite": 0,
+}
+
+ISLAND_DEFAULTS: dict[str, Any] = {
+    "population": 24,
+    "presets": "all",               # names, "all" or "none"
+    "seed_from": None,              # JSON results file(s) of earlier runs
+    "random": None,                 # random members (default: fill the island)
+    "space": {},                    # {param: {low:, high:, log:, choices:}}
+    "fixed": {},                    # {param: value}
+    "selection": {},                # per-island overrides of `selection`
+}
+
 DEFAULT_EXPERIMENT: dict[str, Any] = {
     "name": "experiment",
     "seed": 0,
@@ -38,44 +70,36 @@ DEFAULT_EXPERIMENT: dict[str, Any] = {
     "perturb": dict(DEFAULT_PERTURB),   # null disables procedural variants
     "turns": None,                      # override every scenario's duration
     "stratified": False,                # cycle through scenarios evenly
-    "population": 32,
+    "families": None,                   # {family: island settings}; null = adaptive only
+    "mixing": "mixed",                  # mixed | separate
     "generations": 10,
-    "match_size": 6,                    # population members per match
+    "match_size": 6,                    # evolving members per match (plus opponents)
     "rounds_per_generation": 4,         # matches each member plays per generation
     "opponents": {
         "builtin": ["PriceWarAgent", "DummyAgent"],
         "bundles": [],                  # extra agent bundle folders
         "hall_of_fame": 2,              # past champions sampled into each match
-        "hall_of_fame_size": 10,
+        "hall_of_fame_size": 12,
     },
-    "selection": {
-        "elite": 6,
-        "tournament_k": 3,
-        "crossover_rate": 0.6,
-        "mutation_rate": 0.25,
-        "mutation_scale": 0.15,
-        "immigrants": 2,                # fresh random members per generation
-        "fitness_memory": True,         # survivors keep earlier results
-        "min_matches_for_elite": 0,
-    },
-    "init": {
-        "presets": "all",               # names, "all" or "none"
-        "seed_from": None,              # population/champion JSON of a previous run
-        "random": None,                 # fill remaining slots (default: rest)
-    },
-    "space": {},                        # {param: {low:, high:, log:, choices:}}
-    "fixed": {},                        # {param: value} pinned for everyone
-    "playoff": {"top": 8, "matches": 60, "include_hall_of_fame": True},
+    "selection": dict(SELECTION_DEFAULTS),
+    "playoff": {"per_family": 3, "matches": 60, "include_hall_of_fame": True,
+                "top": None},  # legacy alias of per_family
+    # Legacy single-family keys (used when `families` is null).
+    "population": 32,
+    "init": {"presets": "all", "seed_from": None, "random": None},
+    "space": {},
+    "fixed": {},
 }
 
 
-def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+def deep_merge(base: dict[str, Any], override: dict[str, Any], free: tuple[str, ...] = ()) -> dict[str, Any]:
     out = dict(base)
     for key, value in (override or {}).items():
-        if key not in base:
+        if key not in base and key not in free:
             raise KeyError(f"unknown experiment key: {key}")
-        if isinstance(value, dict) and isinstance(base[key], dict) and key not in ("space", "fixed"):
-            out[key] = deep_merge(base[key], value) if base[key] else dict(value)
+        if isinstance(value, dict) and isinstance(base.get(key), dict) and base[key] \
+                and key not in ("space", "fixed", "families"):
+            out[key] = deep_merge(base[key], value)
         else:
             out[key] = value
     return out
@@ -87,8 +111,37 @@ def load_experiment(path: str | Path | None, overrides: dict[str, Any] | None = 
         with open(path, encoding="utf-8") as stream:
             exp = deep_merge(exp, yaml.safe_load(stream) or {})
     if overrides:
+        families = overrides.pop("families", None)
         exp = deep_merge(exp, overrides)
+        if families:  # --set families.glut.population=40 merges into the file's islands
+            merged = dict(exp.get("families") or {})
+            for name, island in families.items():
+                merged[name] = {**(merged.get(name) or {}), **(island or {})}
+            exp["families"] = merged
+    if exp["playoff"].get("top") is not None:   # legacy key
+        exp["playoff"] = {**exp["playoff"], "per_family": exp["playoff"]["top"]}
     return exp
+
+
+def islands(exp: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    """Resolve per-family island settings (legacy experiments become one island)."""
+    if not exp.get("families"):
+        init = exp.get("init") or {}
+        raw = {"adaptive": {
+            "population": exp["population"], "presets": init.get("presets", "all"),
+            "seed_from": init.get("seed_from"), "random": init.get("random"),
+            "space": exp.get("space") or {}, "fixed": exp.get("fixed") or {},
+        }}
+    else:
+        raw = exp["families"]
+    out = {}
+    for name, settings in raw.items():
+        if name not in FAMILIES:
+            raise KeyError(f"unknown family {name!r}; available: {', '.join(FAMILIES)}")
+        island = deep_merge(ISLAND_DEFAULTS, settings or {})
+        island["selection"] = deep_merge(SELECTION_DEFAULTS, {**exp["selection"], **island["selection"]})
+        out[name] = island
+    return out
 
 
 def scenario_pool(exp: dict[str, Any]) -> ScenarioPool:
@@ -121,83 +174,121 @@ def opponent_entrants(exp: dict[str, Any]) -> list[dict[str, Any]]:
     ]
 
 
+def load_param_sets(path: str | Path, family: str | None = None) -> list[tuple[str, dict[str, Any]]]:
+    """Read (family, params) pairs from a champion, generation, playoff or ranking file.
+
+    Entries without a ``family`` field are ``adaptive`` (older runs). With
+    ``family`` given, only that family's entries are returned.
+    """
+    data = json.loads(Path(path).read_text())
+    if isinstance(data, dict) and "params" in data:
+        items = [data]
+    elif isinstance(data, dict) and "population" in data:
+        items = data["population"]
+    elif isinstance(data, dict) and "islands" in data:
+        items = [m for members in data["islands"].values() for m in members]
+    elif isinstance(data, list):
+        items = data
+    else:
+        raise ValueError(f"unrecognised parameter file: {path}")
+    out = []
+    for item in items:
+        params = item.get("params", item)
+        fam = item.get("family", "adaptive")
+        if family is None or fam == family:
+            out.append((fam, params))
+    return out
+
+
 @dataclass
 class Individual:
     id: str
+    family: str
     params: dict[str, Any]
     origin: str
     born: int
     record: Record = field(default_factory=Record)
 
     def entrant(self) -> dict[str, Any]:
-        return {"id": self.id, "kind": "param", "params": self.params}
+        return {"id": self.id, "kind": "param", "family": self.family, "params": self.params}
 
     def to_json(self) -> dict[str, Any]:
         return {
-            "id": self.id, "origin": self.origin, "born": self.born,
+            "id": self.id, "family": self.family, "origin": self.origin, "born": self.born,
             "params": self.params, **self.record.summary(),
         }
 
 
-def load_param_sets(path: str | Path) -> list[dict[str, Any]]:
-    """Accept a champion file, a generation file, or a list of param dicts."""
-    data = json.loads(Path(path).read_text())
-    if isinstance(data, dict) and "params" in data:
-        return [data["params"]]
-    if isinstance(data, dict) and "population" in data:
-        return [item["params"] for item in data["population"]]
-    if isinstance(data, list):
-        return [item.get("params", item) for item in data]
-    raise ValueError(f"unrecognised parameter file: {path}")
+def _count(value: float, size: int) -> int:
+    return int(round(value * size)) if 0 < value < 1 else int(value)
 
 
 class Evolution:
     def __init__(self, exp: dict[str, Any]) -> None:
         self.exp = exp
         self.rng = random.Random(exp["seed"])
-        self.space = ParamSpace(exp["space"], exp["fixed"])
+        self.islands = islands(exp)
+        self.spaces = {
+            name: ParamSpace(name, island["space"], island["fixed"])
+            for name, island in self.islands.items()
+        }
         self.pool = scenario_pool(exp)
         self.opponents = opponent_entrants(exp)
         self.hall: list[Individual] = []
         self.counter = 0
+        self.last_opponent_records: dict[str, Record] = {}
         stamp = time.strftime("%Y%m%d-%H%M%S")
         self.out = Path(exp["output_dir"]) / f"{exp['name']}-{stamp}"
         self.out.mkdir(parents=True, exist_ok=True)
         (self.out / "experiment.yaml").write_text(yaml.safe_dump(exp, sort_keys=False))
 
-    def _new(self, params: dict[str, Any], origin: str, gen: int) -> Individual:
+    # ------------------------------------------------------------------
+    def _new(self, family: str, params: dict[str, Any], origin: str, gen: int) -> Individual:
         self.counter += 1
-        return Individual(f"g{gen:03d}_{self.counter:04d}", self.space.clip(params), origin, gen)
+        params = self.spaces[family].clip(FAMILIES[family].complete(params))
+        return Individual(f"{family}-g{gen:03d}-{self.counter:04d}", family, params, origin, gen)
 
-    def initial_population(self) -> list[Individual]:
-        size = self.exp["population"]
-        init = self.exp["init"]
-        pop = [self._new(p, f"preset:{name}", 0) for name, p in resolve_presets(init["presets"]).items()]
-        if init.get("seed_from"):
-            pop += [self._new(p, "seeded", 0) for p in load_param_sets(init["seed_from"])]
-        pop = pop[:size]
-        n_random = size - len(pop) if init.get("random") is None else int(init["random"])
-        pop += [self._new(self.space.sample(self.rng), "random", 0) for _ in range(n_random)]
-        return pop
+    def initial_population(self) -> dict[str, list[Individual]]:
+        pops = {}
+        for name, island in self.islands.items():
+            pop = [self._new(name, p, f"preset:{n}", 0)
+                   for n, p in resolve_presets(name, island["presets"]).items()]
+            seeds = island["seed_from"] or []
+            for path in [seeds] if isinstance(seeds, str) else seeds:
+                pop += [self._new(name, p, f"seeded:{Path(path).name}", 0)
+                        for _, p in load_param_sets(path, name)]
+            size = island["population"]
+            pop = pop[:size]
+            n_random = size - len(pop) if island["random"] is None else int(island["random"])
+            pop += [self._new(name, self.spaces[name].sample(self.rng), "random", 0) for _ in range(n_random)]
+            pops[name] = pop
+        return pops
 
-    def evaluate(self, pop: list[Individual], gen: int) -> None:
-        opp = self.exp["opponents"]
-        hall = [ind.entrant() for ind in self.hall if ind.id not in {p.id for p in pop}]
-        jobs = schedule(
-            [ind.entrant() for ind in pop],
+    def _jobs(self, members: list[Individual], hall: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return schedule(
+            [ind.entrant() for ind in members],
             self.exp["match_size"],
             self.exp["rounds_per_generation"],
             self.pool,
             self.rng,
             fixed_opponents=self.opponents,
             sampled_opponents=hall,
-            sampled_count=opp.get("hall_of_fame", 0),
+            sampled_count=self.exp["opponents"].get("hall_of_fame", 0),
         )
+
+    def evaluate(self, pops: dict[str, list[Individual]], gen: int) -> None:
+        members = [ind for pop in pops.values() for ind in pop]
+        ids = {ind.id for ind in members}
+        hall = [ind.entrant() for ind in self.hall if ind.id not in ids]
+        if self.exp["mixing"] == "separate":
+            jobs = [job for pop in pops.values() for job in self._jobs(pop, hall)]
+        else:
+            jobs = self._jobs(members, hall)
         results = run_matches(jobs, self.exp["workers"], desc=f"gen {gen}")
-        if not self.exp["selection"]["fitness_memory"]:
-            for ind in pop:
+        by_id = {ind.id: ind for ind in members}
+        for ind in members:
+            if not self.islands[ind.family]["selection"]["fitness_memory"]:
                 ind.record = Record()
-        by_id = {ind.id: ind for ind in pop}
         fresh = score(results)
         for team, rec in fresh.items():
             if team in by_id:
@@ -211,68 +302,91 @@ class Evolution:
                     target.by_scenario[k].extend(v)
         self.last_opponent_records = {t: r for t, r in fresh.items() if t not in by_id}
 
-    def _pick(self, ranked: list[Individual]) -> Individual:
-        k = self.exp["selection"]["tournament_k"]
+    # ------------------------------------------------------------------
+    def _pick(self, ranked: list[Individual], k: int) -> Individual:
         return min(self.rng.sample(ranked, min(k, len(ranked))), key=lambda i: i.record.fitness)
 
-    def next_generation(self, pop: list[Individual], gen: int) -> list[Individual]:
-        sel = self.exp["selection"]
+    def next_island(self, family: str, pop: list[Individual], gen: int) -> list[Individual]:
+        sel = self.islands[family]["selection"]
+        size = self.islands[family]["population"]
+        space = self.spaces[family]
         ranked = sorted(pop, key=lambda i: i.record.fitness)
         eligible = [i for i in ranked if i.record.matches >= sel["min_matches_for_elite"]]
-        nxt = eligible[: sel["elite"]]
-        nxt += [self._new(self.space.sample(self.rng), "immigrant", gen) for _ in range(sel["immigrants"])]
-        while len(nxt) < self.exp["population"]:
-            a = self._pick(ranked)
+        nxt = eligible[: _count(sel["elite"], size)]
+        nxt += [self._new(family, space.sample(self.rng), "immigrant", gen)
+                for _ in range(_count(sel["immigrants"], size))]
+        while len(nxt) < size:
+            a = self._pick(ranked, sel["tournament_k"])
             if self.rng.random() < sel["crossover_rate"]:
-                b = self._pick(ranked)
-                child = self.space.crossover(a.params, b.params, self.rng)
-                origin = f"cross:{a.id}+{b.id}"
+                b = self._pick(ranked, sel["tournament_k"])
+                child, origin = space.crossover(a.params, b.params, self.rng), f"cross:{a.id}+{b.id}"
             else:
                 child, origin = dict(a.params), f"mut:{a.id}"
-            child = self.space.mutate(child, self.rng, sel["mutation_rate"], sel["mutation_scale"])
-            nxt.append(self._new(child, origin, gen))
-        return nxt
+            child = space.mutate(child, self.rng, sel["mutation_rate"], sel["mutation_scale"])
+            nxt.append(self._new(family, child, origin, gen))
+        return nxt[:size]
 
-    def update_hall(self, pop: list[Individual]) -> None:
-        best = min(pop, key=lambda i: i.record.fitness)
-        if all(best.id != h.id for h in self.hall):
-            self.hall.append(best)
-        size = self.exp["opponents"].get("hall_of_fame_size", 10)
+    def update_hall(self, pops: dict[str, list[Individual]]) -> None:
+        """Keep the best of every island, then trim to the best overall."""
+        known = {h.id for h in self.hall}
+        for pop in pops.values():
+            best = min(pop, key=lambda i: i.record.fitness)
+            if best.id not in known:
+                self.hall.append(best)
+        size = self.exp["opponents"].get("hall_of_fame_size", 12)
         self.hall = sorted(self.hall, key=lambda i: i.record.fitness)[:size]
 
-    def save_generation(self, pop: list[Individual], gen: int) -> None:
-        ranked = sorted(pop, key=lambda i: i.record.fitness)
+    def save_generation(self, pops: dict[str, list[Individual]], gen: int) -> None:
         data = {
             "generation": gen,
-            "population": [ind.to_json() for ind in ranked],
+            "islands": {
+                name: [ind.to_json() for ind in sorted(pop, key=lambda i: i.record.fitness)]
+                for name, pop in pops.items()
+            },
             "opponents": {t: r.summary() for t, r in self.last_opponent_records.items()},
             "hall_of_fame": [ind.to_json() for ind in self.hall],
         }
         (self.out / f"generation_{gen:03d}.json").write_text(json.dumps(data, indent=1))
 
+    def report(self, pops: dict[str, list[Individual]], gen: int, seconds: float) -> None:
+        gens = self.exp["generations"]
+        print(f"\n=== generation {gen}/{gens}  ({seconds:.1f}s) ===")
+        print(f"{'family':<10} {'best':>6} {'median':>7} {'mean rank':>9}  best id")
+        for name, pop in pops.items():
+            fits = [i.record.fitness for i in pop]
+            best = min(pop, key=lambda i: i.record.fitness)
+            print(f"{name:<10} {min(fits):6.3f} {statistics.median(fits):7.3f} "
+                  f"{statistics.fmean(best.record.ranks) if best.record.ranks else float('nan'):9.2f}  {best.id}")
+        for team, rec in sorted(self.last_opponent_records.items(), key=lambda kv: kv[1].fitness):
+            if not any(team == h.id for h in self.hall):
+                print(f"{'(opp)':<10} {rec.fitness:6.3f} {'':>7} {statistics.fmean(rec.ranks):9.2f}  {team}")
+
+    # ------------------------------------------------------------------
     def run(self) -> Path:
-        pop = self.initial_population()
+        pops = self.initial_population()
+        print("islands: " + ", ".join(f"{k}={len(v)}" for k, v in pops.items())
+              + f" | mixing={self.exp['mixing']} | scenarios={len(self.pool.scenarios)}")
         gens = self.exp["generations"]
         for gen in range(1, gens + 1):
             started = time.time()
-            self.evaluate(pop, gen)
-            self.update_hall(pop)
-            self.save_generation(pop, gen)
-            records = {ind.id: ind.record for ind in pop}
-            records.update(self.last_opponent_records)
-            print(f"\n=== generation {gen}/{gens}  ({time.time() - started:.1f}s) ===")
-            print(leaderboard(records, limit=12))
+            self.evaluate(pops, gen)
+            self.update_hall(pops)
+            self.save_generation(pops, gen)
+            self.report(pops, gen, time.time() - started)
             if gen < gens:
-                pop = self.next_generation(pop, gen)
-        return self.playoff(pop)
+                pops = {name: self.next_island(name, pop, gen) for name, pop in pops.items()}
+        return self.playoff(pops)
 
-    def playoff(self, pop: list[Individual]) -> Path:
+    def playoff(self, pops: dict[str, list[Individual]]) -> Path:
         cfg = self.exp["playoff"]
-        finalists = sorted(pop, key=lambda i: i.record.fitness)[: cfg["top"]]
+        finalists: list[Individual] = []
+        for pop in pops.values():
+            finalists += sorted(pop, key=lambda i: i.record.fitness)[: cfg["per_family"]]
         if cfg.get("include_hall_of_fame"):
             ids = {f.id for f in finalists}
             finalists += [h for h in self.hall if h.id not in ids]
-        print(f"\n=== playoff: {len(finalists)} finalists, {cfg['matches']} matches each ===")
+        print(f"\n=== playoff: {len(finalists)} finalists from {len(pops)} families, "
+              f"{cfg['matches']} matches each ===")
         entrants = [f.entrant() for f in finalists]
         jobs = schedule(entrants, len(entrants), cfg["matches"], self.pool, self.rng,
                         fixed_opponents=self.opponents)
@@ -281,11 +395,18 @@ class Evolution:
         by_id = {f.id: f for f in finalists}
         ranked = sorted((t for t in records if t in by_id), key=lambda t: records[t].fitness)
         result = [
-            {"id": t, "origin": by_id[t].origin, "params": by_id[t].params, **records[t].summary()}
+            {"id": t, "family": by_id[t].family, "origin": by_id[t].origin,
+             "params": by_id[t].params, **records[t].summary()}
             for t in ranked
         ]
         (self.out / "playoff.json").write_text(json.dumps(result, indent=1))
+        best_of: dict[str, dict[str, Any]] = {}
+        for item in result:
+            best_of.setdefault(item["family"], item)
+        (self.out / "family_champions.json").write_text(json.dumps(list(best_of.values()), indent=1))
+        print("\nbest per family: " + ", ".join(
+            f"{fam}={item['fitness']:.3f} ({item['id']})" for fam, item in best_of.items()))
         champion = self.out / "champion.json"
         champion.write_text(json.dumps(result[0], indent=1))
-        print(f"\nChampion {result[0]['id']} saved to {champion}")
+        print(f"Champion {result[0]['id']} saved to {champion}")
         return champion

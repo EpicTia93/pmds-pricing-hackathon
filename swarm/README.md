@@ -1,69 +1,96 @@
 # Strategy swarm
 
-A parametrised agent (`strategy.py`), a parallel tournament runner and an
-evolutionary search that picks the strongest parameter sets. It lives outside
-`src/dme_simulator/agents/`, so none of it is auto-discovered by `dme-sim` until
-you **export** a champion.
+Several families of parametrised agents, a parallel tournament runner, and an
+island-model evolutionary search that picks the strongest parameter sets. The
+package lives outside `src/dme_simulator/agents/`, so `dme-sim` discovers none
+of it until you **export** a champion.
 
-| File | Role |
+## Strategy families (`families/`)
+
+Each family is a different idea of how to play, with its own parameters,
+search space (`space.py`) and presets (`presets.py`).
+
+| Family | Core idea |
 | --- | --- |
-| `strategy.py` | `ParamAgent` plus `DEFAULT_PARAMS`, which holds every knob. Self-contained, so it is copied into exported bundles. |
-| `space.py` | Search range for each parameter; sample, mutate, crossover. |
-| `presets.py` | Hand-made archetypes that seed the population. |
-| `scenarios.py` | Loads scenarios and builds randomly perturbed variants of them (capital, supply, prices, WTP, customers, beta, turns, visibility, production cap). |
-| `tournament.py` | Match scheduling, parallel execution, official-style ranking. |
-| `evolve.py` | Genetic algorithm with elitism, hall of fame and a final playoff. |
-| `experiments/*.yaml` | Experiment definitions. |
+| `adaptive` | Cost-plus price driven by sell-through; markups adapt to fill rate; price ladder; optional stockpiling when cheap. |
+| `valuation` | Learns a demand curve per good: listed/sold stats per log-price bin, an optimistic prior, acceptance forced to fall as price rises, and softmax ladders. Material bids are capped by the value of the output. |
+| `glut` | Times the auction: buys big batches only when the reserve has fallen well below its peak, and panic-buys when short. Sells in a premium tier and a value tier. |
+| `rival` | Reads competitors from public state. Avoids and undercuts goods that rivals hold, charges a premium where nobody can supply, and raises bids when supplier lots get drained. |
+| `portfolio` | Treats goods as bandit arms (UCB on realised return on capital, softmax budget split). PI controllers steer prices toward a target sell-through and markups toward a target fill rate. |
+
+Family modules import only the public agent interface, plus `common.py`.
+Export copies `agent.py`, the family module and `common.py` into a bundle that
+the loader accepts as-is.
+
+To add a family: create `families/<name>.py` with `DEFAULTS` and `AGENT`,
+register it in `families/__init__.py`, and add its ranges to `space.SPACES`.
+Presets are optional. Import-time checks keep defaults and spaces in sync.
+
+## Islands
+
+`evolve` runs one island per family listed under `families:`. Each generation:
+
+1. Every member of every island is shuffled into matches (`mixing: mixed`),
+   together with fixed opponents (built-ins, bundles) and hall-of-fame members.
+   With `mixing: separate`, families only meet themselves and the opponents.
+2. All matches run on one process pool. Fitness is the mean normalised rank:
+   0 means first every match, 1 means last every match.
+3. Each island selects, crosses over and mutates **within itself**. Elite and
+   immigrant counts are fractions of the island when below 1.
+4. The best of each island joins a global hall of fame, used as opponents later.
+
+At the end, a **playoff** puts the top `per_family` of each island, plus the
+hall of fame, into the same matches. The run writes `playoff.json`,
+`family_champions.json` (best per family) and `champion.json`.
 
 ## Commands (run from the repository root)
 
 ```bash
-uv run python -m swarm params                                  # all knobs, defaults, ranges
-uv run python -m swarm evolve -e swarm/experiments/quick.yaml  # ~5 s smoke run
-uv run python -m swarm evolve -e swarm/experiments/full.yaml --export my-champion
-uv run python -m swarm evolve -e swarm/experiments/full.yaml --set population=128 --set selection.elite=12
+uv run python -m swarm params                    # every family, parameter, default and range
+uv run python -m swarm params valuation glut
 
-# Fixed strategies head to head: presets, saved results, bundles, random ones
-uv run python -m swarm tournament --preset all --params outputs/swarm/<run>/playoff.json \
-    --bundle src/dme_simulator/agents/test-agent --random 4 --rounds 50 --save ranking.json
+uv run python -m swarm evolve -e swarm/experiments/islands.yaml --export my-champion
+uv run python -m swarm evolve -e swarm/experiments/islands.yaml \
+    --set generations=60 --set families.glut.population=48 --set mixing=separate
 
-uv run python -m swarm export --params outputs/swarm/<run>/champion.json --name my-champion
+# Head to head: presets (family:name, family:all, all), saved results, bundles, randoms
+uv run python -m swarm tournament -e swarm/experiments/generated.yaml --preset all \
+    --params outputs/swarm/<run>/family_champions.json --bundle src/dme_simulator/agents/test-agent \
+    --random 10 --rounds 100 --save ranking.json
+
+uv run python -m swarm export --params outputs/swarm/<run>/family_champions.json --index 2 --name glut-best
+uv run python -m swarm export --preset rival:niche --name rival-niche
 ```
 
-`--set key.sub=value` overrides any experiment key (values are parsed as YAML)
-for both `evolve` and `tournament`.
+## Experiment files (`experiments/`)
 
-## Scoring
+| File | Scenarios | Families |
+| --- | --- | --- |
+| `quick.yaml` | default and scaled market, randomised | adaptive |
+| `full.yaml` | the four supplied configs, randomised | adaptive |
+| `generated.yaml` | `config/generated/*` | adaptive |
+| `islands.yaml` | `config/generated/*` | all five, mixed |
 
-Each match ranks teams by final cash. **Fitness** is the mean normalised rank:
-0 means first in every match and 1 means last in every match. The leaderboard
-also shows:
+Keys you will most often change:
 
-- the official-style mean rank;
-- mean return (final cash / starting cash);
-- win rate;
-- the score per scenario, where `*` marks perturbed variants.
+- `scenarios`: files, folders or globs, with weights.
+- `stratified`: deal scenarios evenly instead of by weight.
+- `perturb`: procedural randomisation of scenarios (see `scenarios.py`); `null` turns it off.
+- `families.<name>`: `population`, `presets`, `seed_from` (one or more result
+  JSONs), `space`, `fixed` and per-island `selection` overrides.
+- `opponents`, `selection` and `playoff`.
+
+Older single-family files (`population`, `init`, `space`, `fixed` at the top
+level) still work and run one `adaptive` island. Defaults live in
+`evolve.DEFAULT_EXPERIMENT`.
 
 ## Outputs
 
 Each run writes `outputs/swarm/<name>-<timestamp>/`, containing:
 
 - `experiment.yaml`, the resolved settings;
-- `generation_NNN.json`, the ranked population with params and stats;
-- `playoff.json`, the finalists ranked;
-- `champion.json`.
+- `generation_NNN.json`, each island ranked, plus the hall of fame;
+- `playoff.json`, `family_champions.json` and `champion.json`.
 
-Any of these JSON files can be passed to `--params` or to `init.seed_from` to
-continue a search.
-
-## Workflow
-
-1. Run `full.yaml`, then inspect `playoff.json`. Check that the champion's score
-   holds up on the perturbed `*` scenarios as well as the stock ones.
-2. Seed the next search from it (`--set init.seed_from=.../playoff.json`).
-   Optionally narrow `space:` or pin `fixed:` values.
-3. Export the champion and check it with `dme-sim --profile`. Then upload the
-   bundle folder, which contains only `agent.py` and `strategy.py`.
-4. To add new behaviour, add a key to `DEFAULT_PARAMS`, use it in
-   `ParamAgent`, and give it a range in `space.SPECS`. The module checks at
-   import time that the two stay in sync.
+Every entry carries `family` and `params`. Any of these files can be passed to
+`--params` or `seed_from`.

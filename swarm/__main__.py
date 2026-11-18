@@ -12,9 +12,9 @@ import yaml
 
 from .evolve import Evolution, load_experiment, load_param_sets, opponent_entrants, scenario_pool
 from .export import export_bundle
-from .presets import PRESETS, resolve as resolve_presets
-from .space import SPECS, ParamSpace
-from .strategy import DEFAULT_PARAMS
+from .families import FAMILIES
+from .presets import PRESETS, resolve_ids
+from .space import SPACES, ParamSpace
 from .tournament import bundle_entrant, leaderboard, run_matches, schedule, score
 
 
@@ -35,25 +35,28 @@ def cmd_evolve(args) -> None:
     exp = load_experiment(args.experiment, _set_overrides(args.set))
     champion = Evolution(exp).run()
     if args.export:
-        params = load_param_sets(champion)[0]
-        print(f"Exported bundle: {export_bundle(params, args.export, str(champion), overwrite=True)}")
+        fam, params = load_param_sets(champion)[0]
+        bundle = export_bundle(params, args.export, str(champion), overwrite=True, family=fam)
+        print(f"Exported bundle: {bundle}")
 
 
 def cmd_tournament(args) -> None:
     exp = load_experiment(args.experiment, _set_overrides(args.set))
     entrants = []
-    for name, params in resolve_presets(args.preset or None).items():
-        entrants.append({"id": f"preset:{name}", "kind": "param", "params": params})
+    for pid, (fam, params) in resolve_ids(args.preset).items():
+        entrants.append({"id": pid, "kind": "param", "family": fam, "params": params})
     for path in args.params or []:
         sets = load_param_sets(path)[: args.top]
         stem = Path(path).parent.name + "/" + Path(path).stem
-        for i, params in enumerate(sets):
+        for i, (fam, params) in enumerate(sets):
             entrant_id = stem if len(sets) == 1 else f"{stem}#{i + 1}"
-            entrants.append({"id": entrant_id, "kind": "param", "params": {**DEFAULT_PARAMS, **params}})
+            entrants.append({"id": f"{entrant_id}[{fam}]", "kind": "param", "family": fam,
+                             "params": FAMILIES[fam].complete(params)})
     rng = random.Random(args.seed)
-    for _ in range(args.random):
-        entrants.append({"id": f"random{len(entrants)}", "kind": "param",
-                         "params": ParamSpace(exp["space"], exp["fixed"]).sample(rng)})
+    for i in range(args.random):
+        fam = list(FAMILIES)[i % len(FAMILIES)] if args.random_family == "all" else args.random_family
+        entrants.append({"id": f"random{i}[{fam}]", "kind": "param", "family": fam,
+                         "params": ParamSpace(fam).sample(rng)})
     entrants += [bundle_entrant(path) for path in args.bundle or []]
     if not entrants:
         sys.exit("no entrants: use --preset, --params, --bundle or --random")
@@ -68,27 +71,33 @@ def cmd_tournament(args) -> None:
         ranked = sorted((t for t in records if t in ids and ids[t]["kind"] == "param"),
                         key=lambda t: records[t].fitness)
         Path(args.save).write_text(json.dumps(
-            [{"id": t, "params": ids[t]["params"], **records[t].summary()} for t in ranked], indent=1))
+            [{"id": t, "family": ids[t]["family"], "params": ids[t]["params"], **records[t].summary()}
+             for t in ranked], indent=1))
         print(f"saved ranking to {args.save}")
 
 
 def cmd_export(args) -> None:
     if args.preset:
-        params, source = PRESETS[args.preset], f"preset {args.preset}"
+        [(fam, params)] = resolve_ids([args.preset]).values()
+        source = f"preset {args.preset}"
     else:
-        params, source = load_param_sets(args.params)[args.index], args.params
-    print(export_bundle(params, args.name, source, overwrite=args.overwrite))
+        fam, params = load_param_sets(args.params)[args.index]
+        source = args.params
+    print(export_bundle(params, args.name, source, overwrite=args.overwrite, family=fam))
 
 
 def cmd_params(args) -> None:
-    print(f"{'parameter':<20} {'default':>12}  space")
-    for name, default in DEFAULT_PARAMS.items():
-        spec = SPECS[name]
-        rng = (f"{spec.choices}" if spec.kind == "choice" else
-               "bool" if spec.kind == "bool" else
-               f"{spec.kind} [{spec.low}, {spec.high}]{' log' if spec.log else ''}")
-        print(f"{name:<20} {str(default):>12}  {rng}")
-    print(f"\npresets: {', '.join(PRESETS)}")
+    for fam in args.family or list(FAMILIES):
+        doc = (FAMILIES[fam].module.__doc__ or "").strip().splitlines()[0]
+        print(f"\n## {fam}: {doc}")
+        print(f"{'parameter':<20} {'default':>12}  space")
+        for name, default in FAMILIES[fam].defaults.items():
+            spec = SPACES[fam][name]
+            rng = (f"{spec.choices}" if spec.kind == "choice" else
+                   "bool" if spec.kind == "bool" else
+                   f"{spec.kind} [{spec.low}, {spec.high}]{' log' if spec.log else ''}")
+            print(f"{name:<20} {str(default):>12}  {rng}")
+        print(f"presets: {', '.join(f'{fam}:{n}' for n in PRESETS.get(fam, {}))}")
 
 
 def main() -> None:
@@ -105,11 +114,12 @@ def main() -> None:
     p.set_defaults(func=cmd_evolve)
 
     p = sub.add_parser("tournament", parents=[common], help="pit fixed strategies against each other")
-    p.add_argument("--preset", nargs="*", help="preset names, or 'all'")
+    p.add_argument("--preset", nargs="*", help="family:name, family:all, or all")
     p.add_argument("--params", nargs="*", help="champion/generation/playoff JSON files")
     p.add_argument("--top", type=int, default=5, help="entries taken from each multi-entry file")
     p.add_argument("--bundle", nargs="*", help="agent bundle folders")
     p.add_argument("--random", type=int, default=0, help="add N random strategies")
+    p.add_argument("--random-family", default="all", help="family for --random (default: cycle all)")
     p.add_argument("--rounds", type=int, default=20, help="matches per entrant")
     p.add_argument("--match-size", type=int, help="entrants per match (default: all)")
     p.add_argument("--seed", type=int, default=0)
@@ -119,13 +129,14 @@ def main() -> None:
     p = sub.add_parser("export", help="write an uploadable agent bundle")
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--params", help="champion/generation/playoff JSON")
-    src.add_argument("--preset")
+    src.add_argument("--preset", help="family:name")
     p.add_argument("--index", type=int, default=0, help="entry index in a multi-entry file")
     p.add_argument("--name", required=True, help="bundle folder name under src/dme_simulator/agents")
     p.add_argument("--overwrite", action="store_true")
     p.set_defaults(func=cmd_export)
 
-    p = sub.add_parser("params", help="list parameters, defaults and search ranges")
+    p = sub.add_parser("params", help="list families, parameters, defaults and search ranges")
+    p.add_argument("family", nargs="*", help="families to show (default: all)")
     p.set_defaults(func=cmd_params)
 
     args = parser.parse_args()

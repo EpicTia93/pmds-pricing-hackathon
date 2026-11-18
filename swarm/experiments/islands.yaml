@@ -1,0 +1,41 @@
+# Five strategy families evolve in parallel as islands. All islands play in
+# the same (mixed) matches, so each family must beat the others. Selection,
+# crossover and mutation stay inside each island. Scenarios: every market in
+# config/generated, dealt evenly.
+name: islands
+seed: 11
+scenarios:
+  - config/generated
+stratified: true
+perturb: null
+
+mixing: mixed                 # mixed | separate
+generations: 40
+match_size: 8                 # evolving members per match
+rounds_per_generation: 8      # matches per member per generation
+
+families:                     # one island each; any key from ISLAND_DEFAULTS
+  adaptive:
+    population: 32
+    fixed: {horizon: 0}       # unknown game length: no endgame bets
+    seed_from: [outputs/swarm/generated-20261118-151421/playoff.json]
+  valuation: {population: 32}
+  glut: {population: 32}
+  rival: {population: 32}
+  portfolio: {population: 32}
+
+opponents:
+  builtin: [PriceWarAgent, DummyAgent]
+  bundles: [src/dme_simulator/agents/swarm-generated]   # last run's champion
+  hall_of_fame: 3
+  hall_of_fame_size: 15
+
+selection:
+  elite: 0.2
+  immigrants: 0.08
+  tournament_k: 3
+  crossover_rate: 0.6
+  mutation_rate: 0.25
+  mutation_scale: 0.15
+
+playoff: {per_family: 3, matches: 400, include_hall_of_fame: true}
