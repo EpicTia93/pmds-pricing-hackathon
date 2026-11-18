@@ -1,0 +1,79 @@
+# Second round for the paper-based families, seeded from the first `papers`
+# run. Two changes make the champions robust to the portal's harder fields:
+#
+# * whales: three pairs of aggressive bidders that drain supplier lots early
+#   (bid markups 1.5x-4x the reserve). Each pair joins half the matches, so a
+#   field has 0-6 of them. That is the regime where the earlier champions
+#   collapsed: no wins for the first turns, then dumping.
+# * tactex, the combination family, starts from the best revman, auction and
+#   capacity members, converted into its parameters, so crossover can combine
+#   their modules.
+#
+# Replace the seed paths with your own run after `papers` (outputs/ is not in git).
+name: papers-robust
+seed: 61
+scenarios:
+  - {path: config/default.yaml, weight: 12}
+  - {path: config/scaled_market.yaml, weight: 4}
+  - {path: config/generated, weight: 1}
+stratified: false
+perturb:
+  probability: 0.4
+  capital: 0.4
+  supply: 0.4
+  material_price: 0.4
+  customers: 0.5
+  wtp: 0.35
+  shares: 0.4
+  beta: 0.6
+  turns: [20, 60]
+  observe_all: 0.3
+  capacity_prob: 0.2
+  capacity_range: [10, 80]
+
+mixing: mixed
+generations: 40
+match_size: [4, 8, 12]
+rounds_per_generation: 8
+
+families:
+  revman:
+    population: 20
+    seed_from: [outputs/swarm/papers-20261118-162241/playoff.json, outputs/swarm/papers-20261118-162241/generation_040.json]
+  auction:
+    population: 20
+    seed_from: [outputs/swarm/papers-20261118-162241/playoff.json, outputs/swarm/papers-20261118-162241/generation_040.json]
+  capacity:
+    population: 20
+    seed_from: [outputs/swarm/papers-20261118-162241/playoff.json, outputs/swarm/papers-20261118-162241/generation_040.json]
+  tactex:
+    population: 32
+    seed_from: [outputs/swarm/papers-20261118-162241/playoff.json, outputs/swarm/papers-20261118-162241/generation_040.json]
+    seed_families: {revman: 4, auction: 4, capacity: 4}
+
+opponents:
+  builtin: [PriceWarAgent, DummyAgent, PatientAgent]
+  bundles:
+    - src/dme_simulator/agents/swarm-robust
+    - src/dme_simulator/agents/swarm-robust-valuation
+    - src/dme_simulator/agents/swarm-islands
+    - src/dme_simulator/agents/champion-generated-421
+    - src/dme_simulator/agents/champion-quick-933
+  crowd:
+    - {bundle: src/dme_simulator/agents/test-agent, count: 10}
+    - {preset: "adaptive:aggressive_bidder", count: 2}
+    - {id: whale-a, family: adaptive, count: 2, probability: 0.5,
+       params: {bid_markup: 1.5, max_bid_markup: 3.0, bid_adapt: 0.3, fill_target: 0.9,
+                budget_share: 0.8, init_spend_frac: 0.5, init_price_mult: 3.0, stock_cover: 1.5}}
+    - {id: whale-b, family: adaptive, count: 2, probability: 0.5,
+       params: {bid_markup: 2.5, max_bid_markup: 4.0, bid_adapt: 0.3, fill_target: 0.9,
+                budget_share: 0.8, init_spend_frac: 0.5, init_price_mult: 3.0, stock_cover: 1.5}}
+    - {id: whale-c, family: adaptive, count: 2, probability: 0.5,
+       params: {bid_markup: 3.5, max_bid_markup: 5.0, bid_adapt: 0.3, fill_target: 0.9,
+                budget_share: 0.8, init_spend_frac: 0.5, init_price_mult: 3.0, stock_cover: 1.5}}
+  hall_of_fame: 3
+  hall_of_fame_size: 15
+
+selection: {elite: 0.2, immigrants: 0.1}
+
+playoff: {per_family: 3, matches: 200, match_size: [8, 12], include_hall_of_fame: true}

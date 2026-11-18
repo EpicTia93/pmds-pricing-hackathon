@@ -18,10 +18,50 @@ search space (`space.py`) and presets (`presets.py`).
 | `rival` | Reads competitors from public state. Avoids and undercuts goods that rivals hold, charges a premium where nobody can supply, and raises bids when supplier lots get drained. |
 | `neutral` | Never trades, so capital stays at its starting value. A zero-risk benchmark with no parameters: run it as a one-member island (`population: 1`, `selection: {elite: 1, immigrants: 0}`). |
 | `portfolio` | Treats goods as bandit arms (UCB on realised return on capital, softmax budget split). PI controllers steer prices toward a target sell-through and markups toward a target fill rate. |
+| `revman` | Revenue management (Gallego & van Ryzin; Gallego & Hu; Besbes & Zeevi). Learns a logistic demand curve per good and values stock by a finite-horizon DP under a prior on the unknown game length. Prices by `dp`, the static logit rule (`myopic`) or a `runout` price, and buys units whose marginal value beats the kit cost. |
+| `auction` | Auction theory (first-price best response; Han, Zhou & Weissman; Ausubel et al.; Balseiro & Gur; Wellman et al.; RoxyBot-06). Learns clearing-price distributions from censored fills and bids kit-level best responses as a per-good ladder. Options: quantile or shade bidding, pacing, and SAA joint bids. |
+| `capacity` | Capacity commitment (Kreps & Scheinkman; Kalymon / Golabi). Holds a restrained stock that sells within `cover` turns, optionally as a price-dependent material base stock, bought at a target win probability and sold at a run-out price. |
+| `tactex` | Predict, then optimise (Pardoe & Stone; Kiekintveld et al.; Ketter et al.). Every engine module is a parameter, plus a scarcity/glut regime switch, so evolution chooses which strategies to combine. |
 
-Family modules import only the public agent interface, plus `common.py`.
-Export copies `agent.py`, the family module and `common.py` into a bundle that
-the loader accepts as-is.
+Family modules import only the public agent interface, plus `common.py` and
+the sibling modules they list in `HELPERS`. Export copies `agent.py`, the
+family module, `common.py` and those helpers into a bundle that the loader
+accepts as-is.
+
+### The paper-based engine (`families/econ.py`)
+
+`revman`, `auction`, `capacity` and `tactex` share one engine. Each turn it
+works backwards from sales to bids:
+
+1. **Learn.** The chance that one listed unit sells is
+   `sigmoid(a - b ln p + offset)`, fitted per good by online logistic
+   regression with a prior. Per material it keeps the distribution of the
+   clearing markup over the reserve, updated from full, partial and missed
+   fills (or the whole log when it is visible).
+2. **Value.** A unit on the shelf is worth the value of the selling policy:
+   the finite-horizon DP, relisting at the static logit price, or the run-out
+   price. A lognormal prior on the game length turns the unknown end into
+   survival odds per turn.
+3. **Buy.** The quantity comes from marginal value against kit cost, a
+   stock cover, or a base stock. Bids come from a kit best response, a
+   quantile or value shading, optionally with pacing and an SAA refinement.
+   It stops buying near the expected end.
+4. **Build** in value order, then **sell**, with one listing per unit
+   (`listing: units`) or a few price rungs (`listing: rungs`).
+
+Each family pins some modules in `FIXED` and evolves the rest. The
+`ENGINE_SPECS` in `space.py` give the ranges for everything theory cannot pin
+down: demand priors, forgetting, the horizon prior, risk attitude, margins and
+learning rates. A per-decision time guard (`TIME_BUDGET`) skips optional work
+under load, and any exception falls back to listing current stock.
+
+**Per-unit listings.** The simulator weights listings, not teams: a customer
+picks among affordable listings with weight exp(-beta x price) each. So ten
+one-unit listings get ten times the pull of one listing of ten. The README
+allows splitting a good across several listings, but this is a quirk worth
+confirming with the organisers. Every engine family has a `rungs` preset for
+when per-unit listings are not wanted (pin it with
+`fixed: {listing: rungs}`).
 
 To add a family: create `families/<name>.py` with `DEFAULTS` and `AGENT`,
 register it in `families/__init__.py`, and add its ranges to `space.SPACES`.
@@ -73,6 +113,8 @@ uv run python -m swarm export --preset rival:niche --name rival-niche
 | `islands.yaml` | `config/generated/*` | all five, mixed |
 | `islands_robust.yaml` | `config/generated/*`, match sizes 2–16 | all five, seeded from `islands` |
 | `islands_neutral.yaml` | `config/generated/*`, match sizes 2–16 | all six including `neutral`, seeded from `islands_robust` |
+| `papers.yaml` | `default.yaml` (about a fifth), `scaled_market`, `config/generated/*`, 40% perturbed; about 27–35 teams per match with a starter-agent crowd | `revman`, `auction`, `capacity`, `tactex` |
+| `papers_robust.yaml` | as `papers`, plus 0–6 lot-draining whales per match; seeded from a `papers` run | the four engine families; `tactex` seeded with converted revman, auction and capacity champions |
 
 **Match size matters.** Rankings change a lot between small and crowded
 markets. In the first island run, `glut` won a playoff that put all 31 teams
@@ -89,7 +131,19 @@ Keys you will most often change:
 - `perturb`: procedural randomisation of scenarios (see `scenarios.py`); `null` turns it off.
 - `families.<name>`: `population`, `presets`, `seed_from` (one or more result
   JSONs), `space`, `fixed` and per-island `selection` overrides.
-- `opponents`, `selection` and `playoff`.
+- `opponents`, `selection` and `playoff`. `opponents.crowd` adds clones
+  (`{bundle: ..., count: n}`, `{builtin: ..., count: n}`,
+  `{preset: "family:name", count: n}` or
+  `{id: ..., family: ..., params: {...}, count: n}`) to every match, so
+  matches reach the portal's field size of about 30 teams. With
+  `probability: p` a group joins only that share of the matches, which varies
+  how harsh the field is. Leaderboards group clones as `label*`.
+- `families.<name>.seed_families: {family: n}` seeds an island with the best
+  `n` members of other families found in `seed_from`, converted into its own
+  parameters (engine families share one vocabulary). This is how `tactex`
+  starts from the revman, auction and capacity champions. A family module can
+  narrow module choices with `CHOICES`; for example, `capacity` keeps only
+  stock-target quantity rules.
 
 Older single-family files (`population`, `init`, `space`, `fixed` at the top
 level) still work and run one `adaptive` island. Defaults live in

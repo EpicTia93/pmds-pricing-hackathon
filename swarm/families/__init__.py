@@ -2,8 +2,10 @@
 
 Each family module exposes ``DEFAULTS`` (all parameters with defaults) and
 ``AGENT`` (a ``BaseAgent`` subclass that accepts parameter overrides as keyword
-arguments). Family modules import only the public agent interface and, at most,
-``.common``. That keeps them copyable into an upload bundle as-is.
+arguments). Family modules import only the public agent interface, ``.common``,
+and the sibling modules they list in ``HELPERS`` (e.g. ``econ.py``, the engine
+of the paper-based families). That keeps them copyable into an upload bundle
+as-is.
 """
 
 from __future__ import annotations
@@ -13,7 +15,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from . import adaptive, glut, neutral, portfolio, rival, valuation
+from . import adaptive, auction, capacity, glut, neutral, portfolio, revman, rival, tactex, valuation
 
 
 @dataclass(frozen=True)
@@ -33,6 +35,11 @@ class Family:
     def source(self) -> Path:
         return Path(self.module.__file__)
 
+    @property
+    def helpers(self) -> list[Path]:
+        """Extra sibling modules an exported bundle needs besides ``common.py``."""
+        return [self.source.with_name(name) for name in getattr(self.module, "HELPERS", ())]
+
     def build(self, params: dict[str, Any]):
         return self.agent_class(**params)
 
@@ -45,7 +52,7 @@ class Family:
 
 FAMILIES: dict[str, Family] = {
     m.__name__.rsplit(".", 1)[-1]: Family(m.__name__.rsplit(".", 1)[-1], m)
-    for m in (adaptive, valuation, glut, rival, portfolio, neutral)
+    for m in (adaptive, valuation, glut, rival, portfolio, neutral, revman, auction, capacity, tactex)
 }
 COMMON = Path(__file__).with_name("common.py")
 

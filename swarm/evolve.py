@@ -56,6 +56,11 @@ ISLAND_DEFAULTS: dict[str, Any] = {
     "space": {},                    # {param: {low:, high:, log:, choices:}}
     "fixed": {},                    # {param: value}
     "selection": {},                # per-island overrides of `selection`
+    # Seed with the best members of *other* families found in `seed_from`,
+    # converted into this family's parameters: {family: how many}. Meant for the
+    # engine families, which share one parameter vocabulary (e.g. seed tactex
+    # with revman, auction and capacity champions so crossover combines them).
+    "seed_families": {},
 }
 
 DEFAULT_EXPERIMENT: dict[str, Any] = {
@@ -78,6 +83,10 @@ DEFAULT_EXPERIMENT: dict[str, Any] = {
     "opponents": {
         "builtin": ["PriceWarAgent", "DummyAgent"],
         "bundles": [],                  # extra agent bundle folders
+        # Clones that fill matches up to a realistic field size, e.g.
+        # [{bundle: src/dme_simulator/agents/test-agent, count: 10},
+        #  {builtin: PatientAgent, count: 1}, {preset: "adaptive:volume", count: 2}]
+        "crowd": [],
         "hall_of_fame": 2,              # past champions sampled into each match
         "hall_of_fame_size": 12,
     },
@@ -169,10 +178,53 @@ def scenario_pool(exp: dict[str, Any]) -> ScenarioPool:
 
 
 def opponent_entrants(exp: dict[str, Any]) -> list[dict[str, Any]]:
+    """Fixed opponents of every match: built-ins, bundles and ``crowd`` clones.
+
+    A crowd entry names one ``builtin``, ``bundle``, ``preset`` (``family:name``)
+    or ``family`` + ``params``, and a ``count``; each clone gets the id
+    ``<label>#<n>``. With ``probability`` < 1 the whole group joins only that
+    share of the matches, so field harshness varies (e.g. aggressive bidders
+    that drain lots in half the matches). The official tournament puts every
+    submitted team in one market (about 30 on the portal), so a crowd of weak
+    and average clones keeps evolution in that regime.
+    """
+    from .presets import preset as preset_params
+
     opp = exp["opponents"]
-    return [builtin_entrant(name) for name in opp.get("builtin") or []] + [
+    out = [builtin_entrant(name) for name in opp.get("builtin") or []] + [
         bundle_entrant(path) for path in opp.get("bundles") or []
     ]
+    for item in opp.get("crowd") or []:
+        if "builtin" in item:
+            base = builtin_entrant(item["builtin"])
+        elif "bundle" in item:
+            base = bundle_entrant(item["bundle"])
+        elif "preset" in item:
+            fam, _, name = str(item["preset"]).partition(":")
+            base = {"id": item["preset"], "kind": "param", "family": fam,
+                    "params": preset_params(fam, name)}
+        elif "family" in item:
+            fam = item["family"]
+            base = {"id": item.get("id") or fam, "kind": "param", "family": fam,
+                    "params": FAMILIES[fam].complete(item.get("params") or {})}
+        else:
+            raise KeyError(f"crowd entry needs builtin, bundle, preset or family: {item}")
+        label = item.get("id") or base["id"]
+        extra = {}
+        if float(item.get("probability", 1.0)) < 1.0:
+            extra = {"group": label, "p": float(item["probability"])}
+        out += [{**base, **extra, "id": f"{label}#{i + 1}"} for i in range(int(item.get("count", 1)))]
+    return out
+
+
+def convert_params(source: str, target: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Map a member of one engine family onto another family's parameters.
+
+    The source's pinned modules (``FIXED``) become explicit values, and keys the
+    target does not evolve are dropped (the target's own defaults fill the rest).
+    """
+    full = {**getattr(FAMILIES[source].agent_class, "FIXED", {}), **FAMILIES[source].complete(params)}
+    return {k: v for k, v in full.items() if k in FAMILIES[target].defaults}
 
 
 def load_param_sets(path: str | Path, family: str | None = None) -> list[tuple[str, dict[str, Any]]]:
@@ -255,7 +307,15 @@ class Evolution:
             pop = [self._new(name, p, f"preset:{n}", 0)
                    for n, p in resolve_presets(name, island["presets"]).items()]
             seeds = island["seed_from"] or []
-            for path in [seeds] if isinstance(seeds, str) else seeds:
+            seeds = [seeds] if isinstance(seeds, str) else seeds
+            wanted = dict(island.get("seed_families") or {})
+            for path in seeds:  # converted champions of other families come first
+                for fam, p in load_param_sets(path):
+                    if fam != name and wanted.get(fam, 0) > 0:
+                        wanted[fam] -= 1
+                        pop.append(self._new(name, convert_params(fam, name, p),
+                                             f"converted:{fam}:{Path(path).name}", 0))
+            for path in seeds:
                 pop += [self._new(name, p, f"seeded:{Path(path).name}", 0)
                         for _, p in load_param_sets(path, name)]
             size = island["population"]
@@ -358,9 +418,16 @@ class Evolution:
             best = min(pop, key=lambda i: i.record.fitness)
             print(f"{name:<10} {min(fits):6.3f} {statistics.median(fits):7.3f} "
                   f"{statistics.fmean(best.record.ranks) if best.record.ranks else float('nan'):9.2f}  {best.id}")
-        for team, rec in sorted(self.last_opponent_records.items(), key=lambda kv: kv[1].fitness):
-            if not any(team == h.id for h in self.hall):
-                print(f"{'(opp)':<10} {rec.fitness:6.3f} {'':>7} {statistics.fmean(rec.ranks):9.2f}  {team}")
+        grouped: dict[str, Record] = {}
+        for team, rec in self.last_opponent_records.items():
+            if any(team == h.id for h in self.hall):
+                continue
+            label = team.split("#", 1)[0] + ("*" if "#" in team else "")
+            agg = grouped.setdefault(label, Record())
+            agg.ranks += rec.ranks
+            agg.norm_ranks += rec.norm_ranks
+        for label, rec in sorted(grouped.items(), key=lambda kv: kv[1].fitness):
+            print(f"{'(opp)':<10} {rec.fitness:6.3f} {'':>7} {statistics.fmean(rec.ranks):9.2f}  {label}")
 
     # ------------------------------------------------------------------
     def run(self) -> Path:

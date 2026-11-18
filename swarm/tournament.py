@@ -168,9 +168,16 @@ def schedule(
     ``match_size`` is an int, a list (one size drawn per round, so strategies
     are tested in small and crowded markets alike), or None for everyone.
     Every match also contains all ``fixed_opponents`` and ``sampled_count``
-    entries drawn from ``sampled_opponents`` (e.g. the hall of fame).
+    entries drawn from ``sampled_opponents`` (e.g. the hall of fame). Fixed
+    opponents carrying a ``group`` and a probability ``p`` < 1 join a match
+    together, with that probability (drawn once per match and group).
     """
     jobs = []
+    fixed = list(fixed_opponents or [])
+    odds: dict[str, float] = {}
+    for e in fixed:
+        if e.get("p", 1.0) < 1.0:
+            odds.setdefault(e["group"], e["p"])
     for _ in range(rounds):
         drawn = rng.choice(match_size) if isinstance(match_size, list) else match_size
         size = max(1, min(drawn or len(entrants), len(entrants)))
@@ -181,7 +188,8 @@ def schedule(
             if len(group) < size:  # top up the last group with other entrants
                 others = [e for e in entrants if e not in group]
                 group += rng.sample(others, min(size - len(group), len(others)))
-            roster = list(group) + list(fixed_opponents or [])
+            present = {g: rng.random() < p for g, p in odds.items()}
+            roster = list(group) + [e for e in fixed if e.get("p", 1.0) >= 1.0 or present[e["group"]]]
             ids = {e["id"] for e in roster}
             extra = [e for e in (sampled_opponents or []) if e["id"] not in ids]
             roster += rng.sample(extra, min(sampled_count, len(extra)))

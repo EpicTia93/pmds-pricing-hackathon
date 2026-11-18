@@ -25,6 +25,67 @@ class Spec:
 
 F, I, B, C = "float", "int", "bool", "choice"
 
+# Ranges for every parameter of the paper-based engine (families/econ.py). The
+# revman, auction, capacity and tactex families evolve subsets of these; the
+# rest of each family is pinned by its ``FIXED`` modules.
+ENGINE_SPECS: dict[str, Spec] = {
+    "pricing": Spec(C, choices=("dp", "myopic", "runout")),
+    "listing": Spec(C, choices=("units", "rungs")),
+    "quantity": Spec(C, choices=("value", "cover", "basestock")),
+    "bidding": Spec(C, choices=("kit", "quantile", "shade")),
+    "kits": Spec(C, choices=("independent", "saa")),
+    "regime": Spec(B),
+    "price_mult0": Spec(F, 1.5, 25.0, log=True),
+    "accept0": Spec(F, 0.03, 0.9),
+    "slope0": Spec(F, 0.3, 15.0, log=True),
+    "prior_weight": Spec(F, 0.5, 40.0, log=True),
+    "memory": Spec(F, 0.5, 0.99),
+    "cannibal": Spec(F, 0.0, 1.2),
+    "explore": Spec(F, 0.0, 0.6),
+    "rungs": Spec(I, 1, 6),
+    "horizon_median": Spec(F, 8.0, 150.0, log=True),
+    "horizon_spread": Spec(F, 0.05, 1.5),
+    "basis_floor": Spec(F, 0.0, 1.5),
+    "runout_frac": Spec(F, 0.2, 2.0),
+    "margin": Spec(F, -0.2, 2.0),
+    "cover": Spec(F, 1.0, 15.0, log=True),
+    "kappa": Spec(F, 0.0, 3.0),
+    "budget_share": Spec(F, 0.05, 1.0),
+    "stop_turns": Spec(F, 0.0, 8.0),
+    "leftover_margin": Spec(F, 0.0, 1.5),
+    "max_lot_share": Spec(F, 0.1, 1.0),
+    "clear0": Spec(F, -0.2, 2.0),
+    "clear_sd0": Spec(F, 0.05, 1.5, log=True),
+    "clear_rate": Spec(F, 0.05, 0.9),
+    "uncontested0": Spec(F, 0.0, 0.95),
+    "aggression": Spec(F, 0.4, 2.0, log=True),
+    "salvage": Spec(F, 0.0, 1.0),
+    "bid_quantile": Spec(F, 0.2, 0.99),
+    "shade": Spec(F, 0.0, 1.0),
+    "pacing_gain": Spec(F, 0.0, 2.0),
+    "spend_rate": Spec(F, 0.01, 0.6, log=True),
+    "saa_samples": Spec(I, 4, 16),
+    "clear_corr": Spec(F, 0.0, 0.95),
+    "scarce_boost": Spec(F, 0.0, 1.5),
+    "glut_ratio": Spec(F, 0.3, 1.0),
+    "glut_cover": Spec(F, 0.0, 6.0),
+}
+ENGINE_FAMILIES = ("revman", "auction", "capacity", "tactex")
+
+
+def _engine_space(name: str) -> dict[str, Spec]:
+    """Engine specs for a family's parameters; a family may narrow module choices
+    with a ``CHOICES`` mapping (e.g. capacity keeps only stock-target quantities)."""
+    narrowed = getattr(FAMILIES[name].module, "CHOICES", {})
+    out = {}
+    for key in FAMILIES[name].defaults:
+        spec = ENGINE_SPECS[key]
+        if key in narrowed:
+            spec = replace(spec, choices=tuple(narrowed[key]))
+        out[key] = spec
+    return out
+
+
 SPACES: dict[str, dict[str, Spec]] = {
     "adaptive": {
         "init_price_mult": Spec(F, 1.5, 40.0, log=True),
@@ -164,7 +225,13 @@ SPACES: dict[str, dict[str, Spec]] = {
         "build_leftovers": Spec(B),
     },
     "neutral": {},  # no parameters: never trades
+    **{name: _engine_space(name) for name in ENGINE_FAMILIES},
 }
+
+from .families.econ import ENGINE_DEFAULTS  # noqa: E402
+
+assert set(ENGINE_SPECS) == set(ENGINE_DEFAULTS), \
+    f"engine space/defaults mismatch {sorted(set(ENGINE_SPECS) ^ set(ENGINE_DEFAULTS))}"
 
 for _name, _specs in SPACES.items():
     _mismatch = set(FAMILIES[_name].defaults) ^ set(_specs)
