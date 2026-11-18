@@ -1,0 +1,20 @@
+# Evolution over every scenario in config/generated/ (40 markets: hardware
+# variants plus synthetic goods/recipes, 6-116 turns). They are already diverse,
+# so procedural perturbation is off and scenarios are dealt evenly.
+name: generated
+seed: 7
+scenarios:
+  - config/generated            # a folder, a glob, or a single file
+stratified: true
+perturb: null
+population: 96
+generations: 40
+match_size: 6
+rounds_per_generation: 10
+opponents:
+  builtin: [PriceWarAgent, DummyAgent]
+  hall_of_fame: 2
+selection:
+  elite: 12
+  immigrants: 6
+playoff: {top: 10, matches: 400, include_hall_of_fame: true}   # 10 per scenario

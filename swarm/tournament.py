@@ -129,12 +129,21 @@ class ScenarioPool:
     scenarios: list[tuple[str, float]]
     perturb: dict[str, Any] | None = None
     turns: int | None = None
+    stratified: bool = False   # deal scenarios like a shuffled deck (ignores weights)
+    _deck: list[str] = field(default_factory=list)
+
+    def _pick(self, rng: random.Random) -> str:
+        paths = [path for path, _ in self.scenarios]
+        if not self.stratified:
+            return rng.choices(paths, [weight for _, weight in self.scenarios])[0]
+        if not self._deck:
+            self._deck = paths[:]
+            rng.shuffle(self._deck)
+        return self._deck.pop()
 
     def draw(self, rng: random.Random) -> dict[str, Any]:
-        paths = [path for path, _ in self.scenarios]
-        weights = [weight for _, weight in self.scenarios]
         job: dict[str, Any] = {
-            "scenario": rng.choices(paths, weights)[0],
+            "scenario": self._pick(rng),
             "seed": rng.randrange(1_000_000_000),
             "turns": self.turns,
         }
@@ -248,7 +257,12 @@ def leaderboard(records: dict[str, Record], limit: int | None = None) -> str:
     ]
     for i, (team, rec) in enumerate(rows, 1):
         s = rec.summary()
-        scen = " ".join(f"{k}={v:.2f}" for k, v in s["by_scenario"].items())
+        items = s["by_scenario"].items()
+        if len(items) > 6:
+            worst = sorted(items, key=lambda kv: -kv[1])[:3]
+            scen = f"{len(items)} scen., worst: " + " ".join(f"{k}={v:.2f}" for k, v in worst)
+        else:
+            scen = " ".join(f"{k}={v:.2f}" for k, v in items)
         lines.append(
             f"{i:>3}  {team:<{width}}  {s['fitness']:7.3f} {s['stderr']:5.3f}  "
             f"{s['mean_rank']:5.2f}  {s['mean_return']:6.2f}  {100 * s['win_rate']:5.1f}  "

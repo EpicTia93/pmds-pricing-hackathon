@@ -37,6 +37,7 @@ DEFAULT_EXPERIMENT: dict[str, Any] = {
     ],
     "perturb": dict(DEFAULT_PERTURB),   # null disables procedural variants
     "turns": None,                      # override every scenario's duration
+    "stratified": False,                # cycle through scenarios evenly
     "population": 32,
     "generations": 10,
     "match_size": 6,                    # population members per match
@@ -95,14 +96,22 @@ def scenario_pool(exp: dict[str, Any]) -> ScenarioPool:
     for item in exp["scenarios"]:
         if isinstance(item, str):
             item = {"path": item}
-        path = Path(item["path"])
-        if not path.is_absolute():
-            path = (REPO / path) if (REPO / path).exists() else path.resolve()
-        scenarios.append((str(path), float(item.get("weight", 1.0))))
+        pattern = str(item["path"])
+        base = REPO if not Path(pattern).is_absolute() else Path("/")
+        if Path(base / pattern).is_dir():
+            pattern = str(Path(pattern) / "*.yaml")
+        if any(ch in pattern for ch in "*?["):
+            paths = sorted(base.glob(pattern) if base == REPO else Path("/").glob(pattern.lstrip("/")))
+            if not paths:
+                raise FileNotFoundError(f"no scenarios match {pattern}")
+        else:
+            paths = [base / pattern if (base / pattern).exists() else Path(pattern).resolve()]
+        for path in paths:
+            scenarios.append((str(path.resolve()), float(item.get("weight", 1.0))))
     perturb = exp["perturb"]
     if perturb:
         perturb = {**DEFAULT_PERTURB, **perturb}
-    return ScenarioPool(scenarios, perturb or None, exp["turns"])
+    return ScenarioPool(scenarios, perturb or None, exp["turns"], exp["stratified"])
 
 
 def opponent_entrants(exp: dict[str, Any]) -> list[dict[str, Any]]:
