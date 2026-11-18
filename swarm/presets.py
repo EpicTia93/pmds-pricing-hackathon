@@ -84,6 +84,7 @@ PRESETS: dict[str, dict[str, dict[str, Any]]] = {
         "focused": {"ucb_c": 0.2, "temperature": 0.08, "budget_share": 0.8},
         "tight_control": {"kp": 0.8, "ki": 0.15, "target_through": 0.95, "fill_kp": 0.6},
     },
+    "neutral": {"baseline": {}},
 }
 
 for _fam, _presets in PRESETS.items():

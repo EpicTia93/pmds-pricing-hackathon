@@ -13,7 +13,7 @@ from pathlib import Path
 from types import ModuleType
 from typing import Any
 
-from . import adaptive, glut, portfolio, rival, valuation
+from . import adaptive, glut, neutral, portfolio, rival, valuation
 
 
 @dataclass(frozen=True)
@@ -45,7 +45,7 @@ class Family:
 
 FAMILIES: dict[str, Family] = {
     m.__name__.rsplit(".", 1)[-1]: Family(m.__name__.rsplit(".", 1)[-1], m)
-    for m in (adaptive, valuation, glut, rival, portfolio)
+    for m in (adaptive, valuation, glut, rival, portfolio, neutral)
 }
 COMMON = Path(__file__).with_name("common.py")
 

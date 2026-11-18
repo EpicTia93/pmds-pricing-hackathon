@@ -60,7 +60,7 @@ def cmd_tournament(args) -> None:
     entrants += [bundle_entrant(path) for path in args.bundle or []]
     if not entrants:
         sys.exit("no entrants: use --preset, --params, --bundle or --random")
-    size = args.match_size or len(entrants)
+    size = args.match_size[0] if args.match_size and len(args.match_size) == 1 else args.match_size
     jobs = schedule(entrants, size, args.rounds, scenario_pool(exp), rng,
                     fixed_opponents=opponent_entrants(exp))
     print(f"{len(entrants)} entrants, {len(jobs)} matches")
@@ -121,7 +121,8 @@ def main() -> None:
     p.add_argument("--random", type=int, default=0, help="add N random strategies")
     p.add_argument("--random-family", default="all", help="family for --random (default: cycle all)")
     p.add_argument("--rounds", type=int, default=20, help="matches per entrant")
-    p.add_argument("--match-size", type=int, help="entrants per match (default: all)")
+    p.add_argument("--match-size", type=int, nargs="+",
+                   help="entrants per match; several values = one drawn per round (default: all)")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--save", help="write ranked params JSON")
     p.set_defaults(func=cmd_tournament)

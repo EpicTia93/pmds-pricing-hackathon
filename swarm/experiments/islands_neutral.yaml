@@ -1,0 +1,40 @@
+# Six islands including the do-nothing neutral benchmark (one member, always
+# kept). Continues from the islands-robust run; about 10 minutes on 20 cores.
+name: islands-neutral
+seed: 31
+scenarios:
+  - config/generated
+stratified: true
+perturb: null
+
+mixing: mixed
+generations: 50
+match_size: [2, 4, 8, 16]
+rounds_per_generation: 12
+
+families:
+  adaptive:
+    population: 40
+    fixed: {horizon: 0}
+    seed_from: [outputs/swarm/islands-robust-20261118-153933/generation_030.json, outputs/swarm/islands-robust-20261118-153933/playoff.json]
+  valuation: {population: 40, seed_from: [outputs/swarm/islands-robust-20261118-153933/generation_030.json, outputs/swarm/islands-robust-20261118-153933/playoff.json]}
+  glut: {population: 24, seed_from: [outputs/swarm/islands-robust-20261118-153933/generation_030.json]}
+  rival: {population: 24, seed_from: [outputs/swarm/islands-robust-20261118-153933/generation_030.json]}
+  portfolio: {population: 24, seed_from: [outputs/swarm/islands-robust-20261118-153933/generation_030.json]}
+  neutral:
+    population: 1
+    presets: [baseline]
+    selection: {elite: 1, immigrants: 0}
+
+opponents:
+  builtin: [PriceWarAgent, DummyAgent]
+  bundles:
+    - src/dme_simulator/agents/swarm-robust
+    - src/dme_simulator/agents/swarm-robust-valuation
+    - src/dme_simulator/agents/champion-generated-421
+  hall_of_fame: 2
+  hall_of_fame_size: 15
+
+selection: {elite: 0.2, immigrants: 0.08}
+
+playoff: {per_family: 4, matches: 300, match_size: [2, 4, 8, 16], include_hall_of_fame: true}

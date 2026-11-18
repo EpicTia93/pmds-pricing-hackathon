@@ -73,7 +73,7 @@ DEFAULT_EXPERIMENT: dict[str, Any] = {
     "families": None,                   # {family: island settings}; null = adaptive only
     "mixing": "mixed",                  # mixed | separate
     "generations": 10,
-    "match_size": 6,                    # evolving members per match (plus opponents)
+    "match_size": 6,                    # members per match (plus opponents); int or list
     "rounds_per_generation": 4,         # matches each member plays per generation
     "opponents": {
         "builtin": ["PriceWarAgent", "DummyAgent"],
@@ -83,6 +83,7 @@ DEFAULT_EXPERIMENT: dict[str, Any] = {
     },
     "selection": dict(SELECTION_DEFAULTS),
     "playoff": {"per_family": 3, "matches": 60, "include_hall_of_fame": True,
+                "match_size": None,  # None = all finalists in every match; int or list
                 "top": None},  # legacy alias of per_family
     # Legacy single-family keys (used when `families` is null).
     "population": 32,
@@ -386,9 +387,9 @@ class Evolution:
             ids = {f.id for f in finalists}
             finalists += [h for h in self.hall if h.id not in ids]
         print(f"\n=== playoff: {len(finalists)} finalists from {len(pops)} families, "
-              f"{cfg['matches']} matches each ===")
+              f"{cfg['matches']} rounds, match size {cfg.get('match_size') or 'all'} ===")
         entrants = [f.entrant() for f in finalists]
-        jobs = schedule(entrants, len(entrants), cfg["matches"], self.pool, self.rng,
+        jobs = schedule(entrants, cfg.get("match_size"), cfg["matches"], self.pool, self.rng,
                         fixed_opponents=self.opponents)
         records = score(run_matches(jobs, self.exp["workers"], desc="playoff"))
         print(leaderboard(records))

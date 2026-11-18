@@ -16,6 +16,7 @@ search space (`space.py`) and presets (`presets.py`).
 | `valuation` | Learns a demand curve per good: listed/sold stats per log-price bin, an optimistic prior, acceptance forced to fall as price rises, and softmax ladders. Material bids are capped by the value of the output. |
 | `glut` | Times the auction: buys big batches only when the reserve has fallen well below its peak, and panic-buys when short. Sells in a premium tier and a value tier. |
 | `rival` | Reads competitors from public state. Avoids and undercuts goods that rivals hold, charges a premium where nobody can supply, and raises bids when supplier lots get drained. |
+| `neutral` | Never trades, so capital stays at its starting value. A zero-risk benchmark with no parameters: run it as a one-member island (`population: 1`, `selection: {elite: 1, immigrants: 0}`). |
 | `portfolio` | Treats goods as bandit arms (UCB on realised return on capital, softmax budget split). PI controllers steer prices toward a target sell-through and markups toward a target fill rate. |
 
 Family modules import only the public agent interface, plus `common.py`.
@@ -70,6 +71,16 @@ uv run python -m swarm export --preset rival:niche --name rival-niche
 | `full.yaml` | the four supplied configs, randomised | adaptive |
 | `generated.yaml` | `config/generated/*` | adaptive |
 | `islands.yaml` | `config/generated/*` | all five, mixed |
+| `islands_robust.yaml` | `config/generated/*`, match sizes 2–16 | all five, seeded from `islands` |
+| `islands_neutral.yaml` | `config/generated/*`, match sizes 2–16 | all six including `neutral`, seeded from `islands_robust` |
+
+**Match size matters.** Rankings change a lot between small and crowded
+markets. In the first island run, `glut` won a playoff that put all 31 teams
+in one match, but it came near the bottom of the evolved agents once matches
+were small. Official match sizes are unknown, so give `match_size` (and
+`playoff.match_size`, or `tournament --match-size 2 4 8 16`) a **list**. One
+size is drawn per round, and strategies are selected for robustness across
+field sizes.
 
 Keys you will most often change:
 

@@ -1,0 +1,35 @@
+# Continue the island run, now testing every strategy in small and crowded
+# markets: each round draws a match size, in the generations and the playoff.
+name: islands-robust
+seed: 23
+scenarios:
+  - config/generated
+stratified: true
+perturb: null
+
+mixing: mixed
+generations: 30
+match_size: [2, 4, 8, 16]     # evolving members per match, drawn per round
+rounds_per_generation: 10
+
+families:
+  adaptive:
+    population: 32
+    fixed: {horizon: 0}
+    seed_from: [outputs/swarm/islands-20261118-153406/generation_040.json, outputs/swarm/generated-20261118-151421/playoff.json]
+  valuation: {population: 32, seed_from: [outputs/swarm/islands-20261118-153406/generation_040.json]}
+  glut: {population: 32, seed_from: [outputs/swarm/islands-20261118-153406/generation_040.json]}
+  rival: {population: 32, seed_from: [outputs/swarm/islands-20261118-153406/generation_040.json]}
+  portfolio: {population: 32, seed_from: [outputs/swarm/islands-20261118-153406/generation_040.json]}
+
+opponents:
+  builtin: [PriceWarAgent, DummyAgent]
+  bundles:
+    - src/dme_simulator/agents/swarm-generated
+    - src/dme_simulator/agents/champion-generated-421
+  hall_of_fame: 2
+  hall_of_fame_size: 15
+
+selection: {elite: 0.2, immigrants: 0.08}
+
+playoff: {per_family: 4, matches: 150, match_size: [2, 4, 8, 16], include_hall_of_fame: true}

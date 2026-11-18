@@ -155,7 +155,7 @@ class ScenarioPool:
 
 def schedule(
     entrants: list[dict[str, Any]],
-    match_size: int,
+    match_size: int | list[int] | None,
     rounds: int,
     pool: ScenarioPool,
     rng: random.Random,
@@ -165,12 +165,15 @@ def schedule(
 ) -> list[dict[str, Any]]:
     """Each round shuffles entrants into groups of ``match_size``.
 
+    ``match_size`` is an int, a list (one size drawn per round, so strategies
+    are tested in small and crowded markets alike), or None for everyone.
     Every match also contains all ``fixed_opponents`` and ``sampled_count``
     entries drawn from ``sampled_opponents`` (e.g. the hall of fame).
     """
     jobs = []
-    size = max(1, min(match_size, len(entrants)))
     for _ in range(rounds):
+        drawn = rng.choice(match_size) if isinstance(match_size, list) else match_size
+        size = max(1, min(drawn or len(entrants), len(entrants)))
         order = entrants[:]
         rng.shuffle(order)
         for start in range(0, len(order), size):

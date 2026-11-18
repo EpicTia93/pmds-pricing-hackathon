@@ -163,6 +163,7 @@ SPACES: dict[str, dict[str, Spec]] = {
         "max_markup": Spec(F, 0.0, 5.0),
         "build_leftovers": Spec(B),
     },
+    "neutral": {},  # no parameters: never trades
 }
 
 for _name, _specs in SPACES.items():
