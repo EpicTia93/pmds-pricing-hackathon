@@ -1,0 +1,56 @@
+# Paper-based engine families (families/econ.py: revman, auction, capacity,
+# tactex) evolved in portal-like crowds. The portal plays every team in one
+# market (about 31), and about half of them barely trade, so each match is
+# filled with starter clones, the baselines, aggressive bidders and the team's
+# earlier champions. default.yaml (the portal's scenario) gets about a fifth
+# of the matches; the rest are scaled_market and config/generated, 40% of them
+# randomly perturbed.
+name: papers
+seed: 53
+scenarios:
+  - {path: config/default.yaml, weight: 12}
+  - {path: config/scaled_market.yaml, weight: 4}
+  - {path: config/generated, weight: 1}      # each of the 40 files
+stratified: false
+perturb:
+  probability: 0.4
+  capital: 0.4
+  supply: 0.4
+  material_price: 0.4
+  customers: 0.5
+  wtp: 0.35
+  shares: 0.4
+  beta: 0.6
+  turns: [20, 60]
+  observe_all: 0.3
+  capacity_prob: 0.2
+  capacity_range: [10, 80]
+
+mixing: mixed
+generations: 40
+match_size: [4, 8, 12]        # evolving members per match; ~27-35 teams in total
+rounds_per_generation: 8
+
+families:
+  revman: {population: 20}
+  auction: {population: 20}
+  capacity: {population: 16}
+  tactex: {population: 28}
+
+opponents:
+  builtin: [PriceWarAgent, DummyAgent, PatientAgent]
+  bundles:
+    - src/dme_simulator/agents/swarm-robust
+    - src/dme_simulator/agents/swarm-robust-valuation
+    - src/dme_simulator/agents/swarm-islands
+    - src/dme_simulator/agents/champion-generated-421
+    - src/dme_simulator/agents/champion-quick-933
+  crowd:
+    - {bundle: src/dme_simulator/agents/test-agent, count: 10}
+    - {preset: "adaptive:aggressive_bidder", count: 2}
+  hall_of_fame: 3
+  hall_of_fame_size: 15
+
+selection: {elite: 0.2, immigrants: 0.1}
+
+playoff: {per_family: 3, matches: 200, match_size: [8, 12], include_hall_of_fame: true}

@@ -85,6 +85,36 @@ PRESETS: dict[str, dict[str, dict[str, Any]]] = {
         "tight_control": {"kp": 0.8, "ki": 0.15, "target_through": 0.95, "fill_kp": 0.6},
     },
     "neutral": {"baseline": {}},
+    # --- paper-based engine families (families/econ.py) --------------------
+    "revman": {
+        "baseline": {},
+        "patient": {"horizon_median": 60.0, "accept0": 0.2, "cannibal": 0.3, "margin": 0.5},
+        "runout": {"pricing": "runout", "runout_frac": 0.7},
+        "static_logit": {"pricing": "myopic", "basis_floor": 1.0},
+        "rungs": {"listing": "rungs", "rungs": 2, "explore": 0.08},   # no per-unit listings
+    },
+    "auction": {
+        "baseline": {},
+        "saa": {"kits": "saa", "saa_samples": 12, "clear_corr": 0.6},
+        "pacer": {"pacing_gain": 1.0, "spend_rate": 0.08},
+        "sure_winner": {"bidding": "quantile", "bid_quantile": 0.9},
+        "shader": {"bidding": "shade", "shade": 0.6},
+        "rungs": {"listing": "rungs", "rungs": 2},
+    },
+    "capacity": {
+        "baseline": {},
+        "cover": {"quantity": "cover", "cover": 3.0},
+        "hoarder": {"kappa": 2.5, "cover": 6.0, "bid_quantile": 0.6},
+        "lean": {"cover": 2.0, "runout_frac": 0.6, "budget_share": 0.3},
+        "rungs": {"listing": "rungs", "rungs": 2},
+    },
+    "tactex": {
+        "baseline": {},
+        "regime": {"regime": True, "scarce_boost": 0.5, "glut_cover": 2.0},
+        "saa_regime": {"kits": "saa", "regime": True, "pacing_gain": 0.5},
+        "cautious": {"margin": 0.6, "budget_share": 0.3, "accept0": 0.15, "stop_turns": 3.0},
+        "rungs": {"listing": "rungs", "rungs": 2},
+    },
 }
 
 for _fam, _presets in PRESETS.items():

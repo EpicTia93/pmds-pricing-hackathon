@@ -44,6 +44,8 @@ def export_bundle(
     module = fam.source.stem
     shutil.copy(fam.source, target / fam.source.name)
     shutil.copy(COMMON, target / COMMON.name)
+    for helper in fam.helpers:
+        shutil.copy(helper, target / helper.name)
     class_name = "".join(part.capitalize() for part in re.split(r"[^A-Za-z0-9]", name) if part) or "Swarm"
     if class_name[0].isdigit():
         class_name = "Agent" + class_name
