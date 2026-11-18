@@ -1,0 +1,7 @@
+# Smoke-test search: ~1 minute on a 20-core machine.
+name: quick
+population: 24
+generations: 5
+match_size: 6
+rounds_per_generation: 3
+playoff: {top: 6, matches: 30}

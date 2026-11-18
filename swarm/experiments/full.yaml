@@ -1,0 +1,58 @@
+# Full search. Every key is optional; omitted keys use swarm/evolve.py defaults.
+# Override anything from the command line with --set key.sub=value.
+name: full
+seed: 1
+workers: null                 # null = all CPUs
+output_dir: outputs/swarm
+
+scenarios:                    # sampled per match, proportional to weight
+  - {path: config/default.yaml, weight: 2}
+  - {path: config/scaled_market.yaml, weight: 2}
+  - {path: config/tutorial_pricing.yaml, weight: 0.5}
+  - {path: config/tutorial_auction.yaml, weight: 0.5}
+turns: null                   # force a duration on every match
+
+perturb:                      # procedural variants of the scenarios above; null disables
+  probability: 0.75
+  capital: 0.4
+  supply: 0.4
+  material_price: 0.4
+  customers: 0.5
+  wtp: 0.35
+  shares: 0.4
+  beta: 0.6
+  turns: [20, 50]
+  observe_all: 0.3
+  capacity_prob: 0.2
+  capacity_range: [10, 80]
+
+population: 64
+generations: 30
+match_size: 6                 # population members per match (plus opponents)
+rounds_per_generation: 6      # matches per member per generation
+
+opponents:
+  builtin: [PriceWarAgent, DummyAgent]
+  bundles: []                 # e.g. [src/dme_simulator/agents/my-old-champion]
+  hall_of_fame: 2             # past generation winners dropped into each match
+  hall_of_fame_size: 10
+
+selection:
+  elite: 8
+  tournament_k: 3
+  crossover_rate: 0.6
+  mutation_rate: 0.25         # per-parameter mutation probability
+  mutation_scale: 0.15        # gaussian sigma as a fraction of the parameter range
+  immigrants: 4
+  fitness_memory: true        # survivors accumulate results across generations
+  min_matches_for_elite: 0
+
+init:
+  presets: all                # or a list of names from swarm/presets.py, or none
+  seed_from: null             # e.g. outputs/swarm/<run>/champion.json or generation_030.json
+  random: null                # number of random members (default: fill population)
+
+space: {}                     # narrow ranges, e.g. {bid_markup: {low: 0.1, high: 0.6}}
+fixed: {}                     # pin params, e.g. {horizon: 0}
+
+playoff: {top: 10, matches: 100, include_hall_of_fame: true}
